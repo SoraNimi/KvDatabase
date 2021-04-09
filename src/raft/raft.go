@@ -694,7 +694,8 @@ func (rf *Raft) doAppendEntries(peerId int) {
 				// 回退优化，参考：https://thesquareplanet.com/blog/students-guide-to-raft/#an-aside-on-optimizations
 				nextIndexBefore := rf.nextIndex[peerId] // 仅为打印log
 
-				if reply.ConflictTerm != -1 { // follower的prevLogIndex位置term冲突了
+				if reply.ConflictTerm != -1 {
+					// follower的prevLogIndex位置term冲突了
 					// 我们找leader log中conflictTerm最后出现位置，如果找到了就用它作为nextIndex，否则用follower的conflictIndex
 					conflictTermIndex := -1
 					for index := args.PrevLogIndex; index > rf.lastIncludedIndex; index-- {

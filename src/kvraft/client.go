@@ -10,12 +10,13 @@ import "crypto/rand"
 import "math/big"
 
 type Clerk struct {
+	mu      sync.Mutex
 	servers []*labrpc.ClientEnd
 	// You will have to modify this struct.
-	mu         sync.Mutex
-	leaderId   int
-	clientId   int64
-	sequenceId int64
+	// the clientId is not repeated every time you restart, then the clientId + seqId is safe
+	clientId int64 // Client unique identifier
+	seqId    int64 // The client's monotonically increasing request id
+	leaderId int
 }
 
 func nrand() int64 {
@@ -47,8 +48,14 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 //
 func (ck *Clerk) Get(key string) string {
 	// You will have to modify this function.
-	args := GetArgs{Key: key, ClientId: ck.clientId, SequenceId: atomic.AddInt64(&ck.sequenceId, 1)}
+	args := GetArgs{
+		Key:      key,
+		ClientId: ck.clientId,
+		SeqId:    atomic.AddInt64(&ck.seqId, 1),
+	}
+
 	DPrintf("Client[%d] Get starts, Key=%s ", ck.clientId, key)
+
 	leaderId := ck.currentLeader()
 	for {
 		reply := GetReply{}
@@ -75,19 +82,22 @@ func (ck *Clerk) Get(key string) string {
 // arguments. and reply must be passed as a pointer.
 //
 func (ck *Clerk) PutAppend(key string, value string, op string) {
+	// You will have to modify this function.
 	args := PutAppendArgs{
-		// You will have to modify this function.
-		Key:        key,
-		Value:      value,
-		Op:         op,
-		SequenceId: atomic.AddInt64(&ck.sequenceId, 1),
-		ClientId:   ck.clientId,
+		Key:      key,
+		Value:    value,
+		Op:       op,
+		ClientId: ck.clientId,
+		SeqId:    atomic.AddInt64(&ck.seqId, 1),
 	}
+
+	DPrintf("Client[%d] PutAppend, Key=%s Value=%s", ck.clientId, key, value)
+
 	leaderId := ck.currentLeader()
 	for {
 		reply := PutAppendReply{}
 		if ck.servers[leaderId].Call("KVServer.PutAppend", &args, &reply) {
-			if reply.Err == OK {
+			if reply.Err == OK { // 成功
 				break
 			}
 		}
