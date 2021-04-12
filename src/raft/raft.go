@@ -25,24 +25,23 @@ import (
 type ApplyMsg struct {
 	CommandValid bool // true为log，false为snapshot
 
-	// 向application层提交日志
+	// Submit logs to the application layer
 	Command      interface{}
 	CommandIndex int
 	CommandTerm  int
 
-	// 向application层安装快照
+	// Install a snapshot to the application layer
 	Snapshot          []byte
 	LastIncludedIndex int
 	LastIncludedTerm  int
 }
 
-// 日志项
+// 日志
 type LogEntry struct {
 	Command interface{}
 	Term    int
 }
 
-// 当前角色
 const ROLE_LEADER = "Leader"
 const ROLE_FOLLOWER = "Follower"
 const ROLE_CANDIDATES = "Candidates"
@@ -61,28 +60,28 @@ type Raft struct {
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
 
-	// 所有服务器，持久化状态（lab-2A不要求持久化）
-	currentTerm       int        // 见过的最大任期
-	votedFor          int        // 记录在currentTerm任期投票给谁了
-	log               []LogEntry // 操作日志
-	lastIncludedIndex int        // snapshot最后1个logEntry的index，没有snapshot则为0
-	lastIncludedTerm  int        // snapthost最后1个logEntry的term，没有snaphost则无意义
+	// 服务器持久化状态
+	currentTerm       int
+	votedFor          int
+	log               []LogEntry
+	lastIncludedIndex int
+	lastIncludedTerm  int
 
-	// 所有服务器，易失状态
-	commitIndex int // 已知的最大已提交索引
-	lastApplied int // 当前应用到状态机的索引
+	// 服务器易失状态
+	commitIndex int
+	lastApplied int
 
-	// 仅Leader，易失状态（成为leader时重置）
-	nextIndex  []int //	每个follower的log同步起点索引（初始为leader log的最后一项）
-	matchIndex []int // 每个follower的log同步进度（初始为0），和nextIndex强关联
+	// Leader易失状态
+	nextIndex  []int
+	matchIndex []int
 
-	// 所有服务器，选举相关状态
-	role              string    // 身份
-	leaderId          int       // leader的id
-	lastActiveTime    time.Time // 上次活跃时间（刷新时机：收到leader心跳、给其他candidates投票、请求其他节点投票）
-	lastBroadcastTime time.Time // 作为leader，上次的广播时间
+	// 服务器选举状态
+	role              string
+	leaderId          int
+	lastActiveTime    time.Time // 上次活跃时间
+	lastBroadcastTime time.Time // leader上次的广播时间
 
-	applyCh chan ApplyMsg // 应用层的提交队列
+	applyCh chan ApplyMsg //apply层的提交队列
 }
 
 // return currentTerm and whether this server
@@ -214,37 +213,28 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 			args.Term, rf.currentTerm, reply.VoteGranted)
 	}()
 
-	// 任期不如我大，拒绝投票
 	if args.Term < rf.currentTerm {
 		return
 	}
 
-	// 发现更大的任期，则转为该任期的follower
 	if args.Term > rf.currentTerm {
 		rf.currentTerm = args.Term
 		rf.role = ROLE_FOLLOWER
 		rf.votedFor = -1
 		rf.leaderId = -1
-		// 继续向下走，进行投票
 	}
 
-	// 每个任期，只能投票给1人
 	if rf.votedFor == -1 || rf.votedFor == args.CandidateId {
-		// candidate的日志必须比我的新
-		// 1, 最后一条log，任期大的更新
-		// 2，任期相同, 更长的log则更新
 		lastLogTerm := rf.lastTerm()
-		// 这里坑了好久，一定要严格遵守论文的逻辑，另外log长度一样也是可以给对方投票的
 		if args.LastLogTerm > lastLogTerm || (args.LastLogTerm == lastLogTerm && args.LastLogIndex >= rf.lastIndex()) {
 			rf.votedFor = args.CandidateId
 			reply.VoteGranted = true
-			rf.lastActiveTime = time.Now() // 为其他人投票，那么重置自己的下次投票时间
+			rf.lastActiveTime = time.Now()
 		}
 	}
 	rf.persist()
 }
 
-// 已兼容snapshot
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
@@ -275,9 +265,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		// 继续向下走
 	}
 
-	// 认识新的leader
 	rf.leaderId = args.LeaderId
-	// 刷新活跃时间
 	rf.lastActiveTime = time.Now()
 
 	// 如果prevLogIndex在快照内，且不是快照最后一个log，那么只能从index=1开始同步了
@@ -381,9 +369,9 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 	// 更新快照位置
 	rf.lastIncludedIndex = args.LastIncludedIndex
 	rf.lastIncludedTerm = args.LastIncludedTerm
-	// 持久化raft state和snapshot
+	// Persistent raft state and snapshot
 	rf.persister.SaveStateAndSnapshot(rf.raftStateForPersist(), args.Data)
-	// snapshot提交给应用层
+	// Submit the snapshot to the application layer
 	rf.installSnapshotToApplication()
 	DPrintf("RaftNode[%d] installSnapshot ends, rf.lastIncludedIndex[%d] rf.lastIncludedTerm[%d] args.lastIncludedIndex[%d] args.lastIncludedTerm[%d] logSize[%d]",
 		rf.me, rf.lastIncludedIndex, rf.lastIncludedTerm, args.LastIncludedIndex, args.LastIncludedTerm, len(rf.log))
@@ -581,11 +569,9 @@ func (rf *Raft) electionLoop() {
 					DPrintf("RaftNode[%d] RequestVote ends, finishCount[%d] voteCount[%d] Role[%s] maxTerm[%d] currentTerm[%d]", rf.me, finishCount, voteCount,
 						rf.role, maxTerm, rf.currentTerm)
 				}()
-				// 如果角色改变了，则忽略本轮投票结果
 				if rf.role != ROLE_CANDIDATES {
 					return
 				}
-				// 发现了更高的任期，切回follower
 				if maxTerm > rf.currentTerm {
 					rf.role = ROLE_FOLLOWER
 					rf.leaderId = -1
@@ -594,7 +580,6 @@ func (rf *Raft) electionLoop() {
 					rf.persist()
 					return
 				}
-				// 赢得大多数选票，则成为leader
 				if voteCount > len(rf.peers)/2 {
 					rf.role = ROLE_LEADER
 					rf.leaderId = rf.me
@@ -606,7 +591,7 @@ func (rf *Raft) electionLoop() {
 					for i := 0; i < len(rf.peers); i++ {
 						rf.matchIndex[i] = 0
 					}
-					rf.lastBroadcastTime = time.Unix(0, 0) // 令appendEntries广播立即执行
+					rf.lastBroadcastTime = time.Unix(0, 0)
 					return
 				}
 			}
@@ -616,12 +601,6 @@ func (rf *Raft) electionLoop() {
 
 // 已兼容snapshot
 func (rf *Raft) updateCommitIndex() {
-	// 数字N, 让nextIndex[i]的大多数>=N
-	// peer[0]' index=2
-	// peer[1]' index=2
-	// peer[2]' index=1
-	// 1,2,2
-	// 更新commitIndex, 就是找中位数
 	sortedMatchIndex := make([]int, 0)
 	sortedMatchIndex = append(sortedMatchIndex, rf.lastIndex())
 	for i := 0; i < len(rf.peers); i++ {
@@ -739,7 +718,6 @@ func (rf *Raft) doInstallSnapshot(peerId int) {
 			rf.mu.Lock()
 			defer rf.mu.Unlock()
 
-			// 如果不是rpc前的leader状态了，那么啥也别做了
 			if rf.currentTerm != args.Term {
 				return
 			}
@@ -751,16 +729,15 @@ func (rf *Raft) doInstallSnapshot(peerId int) {
 				rf.persist()
 				return
 			}
-			rf.nextIndex[peerId] = rf.lastIndex() + 1      // 重新从末尾同步log（未经优化，但够用）
-			rf.matchIndex[peerId] = args.LastIncludedIndex // 已同步到的位置（未经优化，但够用）
-			rf.updateCommitIndex()                         // 更新commitIndex
+			rf.nextIndex[peerId] = rf.lastIndex() + 1
+			rf.matchIndex[peerId] = args.LastIncludedIndex
+			rf.updateCommitIndex()
 			DPrintf("RaftNode[%d] doInstallSnapshot ends, leaderId[%d] peerId[%d] nextIndex[%d] matchIndex[%d] commitIndex[%d]\n", rf.me, rf.leaderId, peerId, rf.nextIndex[peerId],
 				rf.matchIndex[peerId], rf.commitIndex)
 		}
 	}()
 }
 
-// lab-2A只做心跳，不考虑log同步
 func (rf *Raft) appendEntriesLoop() {
 	for !rf.killed() {
 		time.Sleep(10 * time.Millisecond)
@@ -787,7 +764,6 @@ func (rf *Raft) appendEntriesLoop() {
 					continue
 				}
 
-				// 如果nextIndex在leader的snapshot内，那么直接同步snapshot
 				if rf.nextIndex[peerId] <= rf.lastIncludedIndex {
 					rf.doInstallSnapshot(peerId)
 				} else { // 否则同步日志
@@ -826,8 +802,6 @@ func (rf *Raft) applyLogLoop() {
 	}
 }
 
-//////////// snapshot 相关方法 //////////////////
-
 func (rf *Raft) installSnapshotToApplication() {
 	var applyMsg *ApplyMsg
 
@@ -838,7 +812,6 @@ func (rf *Raft) installSnapshotToApplication() {
 		LastIncludedIndex: rf.lastIncludedIndex,
 		LastIncludedTerm:  rf.lastIncludedTerm,
 	}
-	// 快照部分就已经提交给application了，所以后续applyLoop提交日志后移
 	rf.lastApplied = rf.lastIncludedIndex
 
 	DPrintf("RaftNode[%d] installSnapshotToApplication, snapshotSize[%d] lastIncludedIndex[%d] lastIncludedTerm[%d]",
@@ -944,11 +917,11 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	DPrintf("RaftNode[%d] Make again", rf.me)
 
-	// election逻辑
+	// 启动election协程
 	go rf.electionLoop()
-	// leader逻辑
+	// leader启动添加日志协程
 	go rf.appendEntriesLoop()
-	// apply逻辑
+	// 启动应用日志协程
 	go rf.applyLogLoop()
 
 	DPrintf("Raftnode[%d]启动", me)

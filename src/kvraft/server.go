@@ -30,9 +30,9 @@ type Op struct {
 	// Your definitions here.
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
-	Index    int    // 写入raft log时的index
-	Term     int    // 写入raft log时的term
-	Type     string // PutAppend, Get
+	Index    int    // 写入raft日志的index
+	Term     int    // 写入raft日志的term
+	Type     string // Get and PutAppend
 	Key      string
 	Value    string
 	SeqId    int64
@@ -159,7 +159,7 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 		kv.mu.Lock()
 		defer kv.mu.Unlock()
 
-		// 保存RPC上下文，等待提交回调，可能会因为Leader变更覆盖同样Index，不过前一个RPC会超时退出并令客户端重试
+		// Save the RPC context and wait for the callback to be submitted
 		kv.reqMap[op.Index] = opCtx
 	}()
 
@@ -177,13 +177,16 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	timer := time.NewTimer(2000 * time.Millisecond)
 	defer timer.Stop()
 	select {
-	case <-opCtx.committed: // 如果提交了
-		if opCtx.wrongLeader { // 同样index位置的term不一样了, 说明leader变了，需要client向新leader重新写入
+	case <-opCtx.committed: // If submitted
+		//The term at the same index position is different,
+		//indicating that the leader has changed and the client needs to rewrite to the new leader
+		if opCtx.wrongLeader {
 			reply.Err = ErrWrongLeader
 		} else if opCtx.ignored {
-			// 说明req id过期了，该请求被忽略，对MIT这个lab来说只需要告知客户端OK跳过即可
+			// It means that the req id has expired and the request is ignored.
+			//you only need to tell the client OK to skip.
 		}
-	case <-timer.C: // 如果2秒都没提交成功，让client重试
+	case <-timer.C: // If the submission is not successful for 2 seconds, let the client retry
 		reply.Err = ErrWrongLeader
 	}
 }
@@ -256,7 +259,7 @@ func (kv *KVServer) applyLoop() {
 						}
 					}
 
-					// 只处理ID单调递增的客户端写请求
+					// Only handle client write requests with monotonically increasing IDs
 					if op.Type == OP_TYPE_PUT || op.Type == OP_TYPE_APPEND {
 						if !existSeq || op.SeqId > prevSeq { // 如果是递增的请求ID，那么接受它的变更
 							if op.Type == OP_TYPE_PUT { // put操作
@@ -294,8 +297,9 @@ func (kv *KVServer) snapshotLoop() {
 		var lastIncludedIndex int
 		// 锁内dump snapshot
 		func() {
-			// 如果raft log超过了maxraftstate大小，那么对kvStore快照下来
-			if kv.maxraftstate != -1 && kv.rf.ExceedLogSize(kv.maxraftstate) { // 这里调用ExceedLogSize不要加kv锁，否则会死锁
+			// If the raft log exceeds the maxraftstate size, take a snapshot of kvStore
+			if kv.maxraftstate != -1 && kv.rf.ExceedLogSize(kv.maxraftstate) {
+				// 这里调用ExceedLogSize不要加kv锁，否则会死锁
 				// 锁内快照，离开锁通知raft处理
 				kv.mu.Lock()
 				w := new(bytes.Buffer)
