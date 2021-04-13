@@ -670,7 +670,6 @@ func (rf *Raft) doAppendEntries(peerId int) {
 				rf.matchIndex[peerId] = rf.nextIndex[peerId] - 1
 				rf.updateCommitIndex() // 更新commitIndex
 			} else {
-				// 回退优化，参考：https://thesquareplanet.com/blog/students-guide-to-raft/#an-aside-on-optimizations
 				nextIndexBefore := rf.nextIndex[peerId] // 仅为打印log
 
 				if reply.ConflictTerm != -1 {
@@ -683,10 +682,10 @@ func (rf *Raft) doAppendEntries(peerId int) {
 							break
 						}
 					}
-					if conflictTermIndex != -1 { // leader log出现了这个term，那么从这里prevLogIndex之前的最晚出现位置尝试同步
+					if conflictTermIndex != -1 {
 						rf.nextIndex[peerId] = conflictTermIndex
 					} else {
-						rf.nextIndex[peerId] = reply.ConflictIndex // 用follower首次出现term的index作为同步开始
+						rf.nextIndex[peerId] = reply.ConflictIndex
 					}
 				} else {
 					// follower没有发现prevLogIndex term冲突, 可能是被snapshot了或者日志长度不够
